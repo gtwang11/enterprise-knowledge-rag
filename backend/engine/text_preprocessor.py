@@ -1,0 +1,34 @@
+"""文本预处理：jieba 分词、去停用词、特殊字符过滤"""
+
+import re
+
+# 中文停用词表（精简版）
+STOP_WORDS = set([
+    "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一",
+    "一个", "上", "也", "很", "到", "说", "要", "去", "你", "会", "着",
+    "没有", "看", "好", "自己", "这", "他", "她", "它", "们", "那", "些",
+    "什么", "怎么", "如何", "为什么", "吗", "吧", "呢", "啊", "哦", "嗯",
+    "可以", "这个", "那个", "哪个", "哪里", "还是", "或者", "但", "但是",
+    "虽然", "因为", "所以", "如果", "的话", "而且", "然后", "已经", "正在",
+])
+
+
+class TextPreprocessor:
+    """文本预处理"""
+
+    def process(self, text: str) -> str:
+        # 去除特殊字符，保留中文、英文、数字
+        cleaned = re.sub(r'[^一-龥a-zA-Z0-9\s]', ' ', text)
+        # 去除多余空白
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+
+        # 尝试 jieba 分词
+        try:
+            import jieba
+            words = jieba.cut(cleaned)
+            words = [w.strip() for w in words if w.strip() and w.strip() not in STOP_WORDS]
+            result = " ".join(words)
+            # 如果分词后为空，回退到原文
+            return result if result.strip() else text.strip()
+        except ImportError:
+            return cleaned if cleaned else text.strip()
