@@ -10,6 +10,7 @@ from models.user import User
 from schemas.auth import LoginRequest, ChangePasswordRequest
 from schemas.common import ApiResponse
 from services import auth_service
+from config import JWT_EXPIRE_MINUTES
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
@@ -49,6 +50,6 @@ def refresh_token(request: Request, db: Session = Depends(get_db),
     new_token = check_token_expiring(token)
     if new_token:
         return ApiResponse(code=200, message="success", data={
-            "access_token": new_token, "token_type": "bearer", "expires_in": 30 * 60
+            "access_token": new_token, "token_type": "bearer", "expires_in": JWT_EXPIRE_MINUTES * 60
         }, timestamp=int(time.time() * 1000))
     return ApiResponse(code=200, message="Token未过期", data=None, timestamp=int(time.time() * 1000))

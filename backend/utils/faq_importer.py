@@ -41,8 +41,8 @@ def parse_excel(file_content: bytes) -> Tuple[List[dict], List[str]]:
             errors.append(f"第{i}行：答案为空，跳过")
             continue
         if category and category not in ALLOWED_CATEGORIES:
-            errors.append(f"第{i}行：分类'{category}'不在预定义列表中，跳过")
-            continue
+            errors.append(f"第{i}行：分类'{category}'不在预定义列表中，已设为'其他'")
+            category = "其他"
 
         items.append({
             "question": question[:500],
@@ -115,8 +115,8 @@ def parse_csv(file_content: bytes) -> Tuple[List[dict], List[str]]:
             errors.append(f"第{i}行：答案为空，跳过")
             continue
         if category and category not in ALLOWED_CATEGORIES:
-            errors.append(f"第{i}行：分类'{category}'不在预定义列表中，跳过")
-            continue
+            errors.append(f"第{i}行：分类'{category}'不在预定义列表中，已设为'其他'")
+            category = "其他"
 
         items.append({
             "question": question[:500],

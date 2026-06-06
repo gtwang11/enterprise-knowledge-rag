@@ -5,7 +5,7 @@ from engine.prompts import SYSTEM_INSTRUCTION, QA_TEMPLATE
 from engine.text_preprocessor import TextPreprocessor
 from engine.embedding_manager import EmbeddingManager
 from engine.vector_store import get_vector_store
-from engine.llm_manager import LLMManager
+from engine.llm_manager import LLMManager, LLMError
 
 
 class RAGPipeline:
@@ -73,7 +73,18 @@ class RAGPipeline:
             question=question,
         )
 
-        answer = self.llm.generate(prompt)
+        try:
+            answer = self.llm.generate(prompt)
+        except LLMError as e:
+            from utils.logger import app_logger
+            app_logger.error(f"LLM 生成失败: {e}")
+            return {
+                "has_answer": True,
+                "answer": e.fallback,
+                "similarity": results[0]["similarity"],
+                "references": [{"faq_id": r["faq_id"], "question": r["question"]} for r in results],
+                "message": f"LLM 生成失败: {e}",
+            }
 
         return {
             "has_answer": True,

@@ -22,13 +22,19 @@ class TextPreprocessor:
         # 去除多余空白
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
 
+        if not cleaned:
+            # 全特殊字符输入被洗为空串，返回原始文本（保留部分可识别内容）
+            from utils.logger import app_logger
+            app_logger.warning(f"文本预处理后为空，使用原始输入: '{text[:100]}'")
+            return text.strip()
+
         # 尝试 jieba 分词
         try:
             import jieba
             words = jieba.cut(cleaned)
             words = [w.strip() for w in words if w.strip() and w.strip() not in STOP_WORDS]
             result = " ".join(words)
-            # 如果分词后为空，回退到原文
-            return result if result.strip() else text.strip()
+            # 如果分词后为空，回退到清理后的文本
+            return result if result.strip() else cleaned
         except ImportError:
-            return cleaned if cleaned else text.strip()
+            return cleaned

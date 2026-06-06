@@ -121,4 +121,24 @@ const router = createRouter({
   routes,
 })
 
+// 全局鉴权守卫
+router.beforeEach((to, _from, next) => {
+  const token = localStorage.getItem('token')
+  const role = localStorage.getItem('role')
+  const requiresAuth = to.meta.requiresAuth !== false
+  const allowedRoles = (to.meta.roles as string[] | undefined) || []
+
+  // 未登录 → 跳转登录页
+  if (requiresAuth && !token) {
+    return next({ name: 'Login', query: { redirect: to.fullPath } })
+  }
+
+  // 已登录但角色不匹配 → 403
+  if (requiresAuth && allowedRoles.length > 0 && role && !allowedRoles.includes(role)) {
+    return next({ name: 'Forbidden' })
+  }
+
+  next()
+})
+
 export default router

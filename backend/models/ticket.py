@@ -17,6 +17,7 @@ class Ticket(Base):
     handler_id = Column(Integer, ForeignKey("users.id"), default=None, index=True)
     solution = Column(Text, default=None)
     reject_reason = Column(String(500), default=None)
+    assigned_at = Column(DateTime, default=None)
     confirmed_at = Column(DateTime, default=None)
     completed_at = Column(DateTime, default=None)
     created_at = Column(DateTime, nullable=False, server_default=func.now())

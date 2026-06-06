@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from models.user import User
 from models.password_history import PasswordHistory
-from config import LOGIN_MAX_ATTEMPTS, LOGIN_LOCK_MINUTES
+from config import LOGIN_MAX_ATTEMPTS, LOGIN_LOCK_MINUTES, JWT_EXPIRE_MINUTES
 from dependencies import create_access_token, blacklist_token
 from utils.security import hash_password, verify_password, validate_password_complexity
 
@@ -46,7 +46,7 @@ def authenticate(db: Session, username: str, password: str) -> dict:
     return {
         "access_token": token,
         "token_type": "bearer",
-        "expires_in": 30 * 60,
+        "expires_in": JWT_EXPIRE_MINUTES * 60,
         "role": user.role,
         "display_name": user.display_name,
         "is_first_login": bool(user.is_first_login),

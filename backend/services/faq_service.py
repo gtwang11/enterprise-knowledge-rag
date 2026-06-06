@@ -124,7 +124,7 @@ def bulk_import_faqs(db: Session, items: list[dict], user_id: int) -> dict:
     db.commit()
     faq_ids = [f.id for f in faq_ids]
 
-    # 后台线程分批向量化，带延迟防止 Ollama 过载
+    # 后台线程分批向量化，带重试 + 延迟防止 Ollama 过载
     import threading
     def _vectorize_background():
         from engine.vector_store import get_vector_store
@@ -139,19 +139,33 @@ def bulk_import_faqs(db: Session, items: list[dict], user_id: int) -> dict:
 
         ok = 0
         fail = 0
+        max_retries = 3
         total = len(faq_ids)
 
         for batch_start in range(0, total, VECTORIZE_BATCH_SIZE):
             batch = faq_ids[batch_start:batch_start + VECTORIZE_BATCH_SIZE]
             for fid in batch:
-                try:
-                    faq = bg_db.query(Faq).get(fid)
-                    if faq:
-                        store.add_faq(fid, faq.question, faq.answer, faq.category, faq.keywords or "")
-                        ok += 1
-                except Exception as e:
-                    fail += 1
-                    app_logger.error(f"后台向量化失败 faq_id={fid}: {type(e).__name__}: {e}")
+                for attempt in range(1, max_retries + 1):
+                    try:
+                        faq = bg_db.query(Faq).get(fid)
+                        if faq:
+                            store.add_faq(fid, faq.question, faq.answer, faq.category, faq.keywords or "")
+                            ok += 1
+                        break  # 成功则跳出重试循环
+                    except Exception as e:
+                        if attempt < max_retries:
+                            backoff = 2 ** attempt
+                            app_logger.warning(
+                                f"后台向量化失败 faq_id={fid} (第{attempt}/{max_retries}次), "
+                                f"{backoff}s 后重试: {type(e).__name__}: {e}"
+                            )
+                            time.sleep(backoff)
+                        else:
+                            fail += 1
+                            app_logger.error(
+                                f"后台向量化最终失败 faq_id={fid} (已重试{max_retries}次): "
+                                f"{type(e).__name__}: {e}"
+                            )
             # 批次间休息，防止 Ollama 过载
             if batch_start + VECTORIZE_BATCH_SIZE < total:
                 time.sleep(VECTORIZE_BATCH_DELAY)
@@ -159,7 +173,7 @@ def bulk_import_faqs(db: Session, items: list[dict], user_id: int) -> dict:
         bg_db.close()
         app_logger.info(f"后台向量化完成: 成功={ok} 失败={fail} 总计={total}")
 
-    threading.Thread(target=_vectorize_background, daemon=True).start()
+    threading.Thread(target=_vectorize_background, daemon=True, name="faq-vectorizer").start()
 
     return {"success_count": len(faq_ids), "skip_count": 0}
 
@@ -174,10 +188,14 @@ def reindex_all_faqs(db: Session) -> dict:
     store = get_vector_store()
     embedder = EmbeddingManager()
 
-    # 清空向量库
+    # 清空向量库（ChromaDB 1.5.x 需按 ID 逐个删除）
     try:
-        store.collection.delete(where={})
-        app_logger.info("向量库已清空，开始全量重建索引...")
+        existing = store.collection.get(include=[])
+        if existing and existing.get("ids"):
+            store.collection.delete(ids=existing["ids"])
+            app_logger.info(f"向量库已清空 {len(existing['ids'])} 条，开始全量重建索引...")
+        else:
+            app_logger.info("向量库为空，直接开始全量重建索引...")
     except Exception as e:
         app_logger.error(f"清空向量库失败: {e}")
         return {"success": False, "message": f"清空向量库失败: {e}"}

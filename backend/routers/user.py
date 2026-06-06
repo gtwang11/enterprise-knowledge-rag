@@ -46,7 +46,7 @@ def list_users(
 def create_user(req: UserCreate, db: Session = Depends(get_db),
                 admin: User = Depends(require_role("admin"))):
     try:
-        user = user_service.create_user(db, req.model_dump(), admin.id)
+        user = user_service.create_user(db, req.model_dump())
         from services.operation_log_service import log_operation
         log_operation(db, admin.id, "create_user", "user", user.id, f"创建账号 {user.username}")
         return ApiResponse(code=201, message="success", data={

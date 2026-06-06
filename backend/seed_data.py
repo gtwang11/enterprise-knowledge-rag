@@ -5,6 +5,7 @@ from models.faq import Faq
 from utils.security import hash_password
 from engine.vector_store import get_vector_store
 from utils.logger import app_logger
+import config
 
 
 SEED_FAQS = [
@@ -40,7 +41,7 @@ def seed_if_empty(db):
     if not admin:
         admin = User(
             username="admin",
-            password_hash=hash_password("123456"),
+            password_hash=hash_password(config.DEFAULT_INITIAL_PASSWORD),
             display_name="系统管理员",
             phone="13800000000",
             department="IT运维部",
@@ -48,7 +49,7 @@ def seed_if_empty(db):
         )
         db.add(admin)
         db.flush()
-        app_logger.info("已创建 admin 账号 (初始密码: 123456)")
+        app_logger.info(f"已创建 admin 账号 (初始密码: {config.DEFAULT_INITIAL_PASSWORD})")
 
     # 检查 FAQ 是否为空
     faq_count = db.query(Faq).count()

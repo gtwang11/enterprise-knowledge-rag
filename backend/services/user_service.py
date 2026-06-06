@@ -8,14 +8,15 @@ from sqlalchemy import or_
 from models.user import User
 from models.password_history import PasswordHistory
 from utils.security import hash_password, generate_random_password
+import config
 
 
-def create_user(db: Session, data: dict, admin_id: int) -> User:
+def create_user(db: Session, data: dict) -> User:
     """创建账号"""
     if db.query(User).filter(User.username == data["username"]).first():
         raise ValueError("账号名已存在")
 
-    password = "123456"
+    password = config.DEFAULT_INITIAL_PASSWORD
 
     user = User(
         username=data["username"],
@@ -90,7 +91,7 @@ def toggle_user_status(db: Session, user_id: int, admin_id: int):
 def reset_password(db: Session, user_id: int) -> str:
     """重置密码"""
     user = get_user(db, user_id)
-    password = "123456"
+    password = config.DEFAULT_INITIAL_PASSWORD
 
     db.add(PasswordHistory(user_id=user.id, password_hash=user.password_hash))
     user.password_hash = hash_password(password)

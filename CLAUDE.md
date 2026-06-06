@@ -74,14 +74,35 @@ LLM_TIMEOUT_SECONDS = 30
     → 写入 qa_history 表 + 清理旧记录(保留最近20条)
 ```
 
+## 代码审查报告
+
+完整审查报告见 **[PROJECT_REVIEW.md](./PROJECT_REVIEW.md)**，包含 22 项问题和修复建议。
+
 ## 当前已知问题 (2026-06-06)
 
-1. **ChromaDB 版本不兼容**: `requirements.txt` 写 `chromadb>=0.5.0`，实际安装 1.5.9。
-   1.x 的 Rust bindings 和 tenant 机制有兼容问题。
-   错误: `'RustBindingsAPI' object has no attribute 'bindings'`
-2. **向量库不完整**: 1025 条 FAQ，仅 298 条完成向量化。后台线程 `daemon=True` 失败无重试。
-3. **Ollama Embedding 超时**: 批量导入 1000 条时逐条调用 Ollama，导致超时。
-4. **文本预处理空结果**: 全特殊字符输入被正则洗为空串 → 零向量。
+### P0 — 严重 → ✅ 全部修复
+
+1. ✅ **硬编码初始密码 "123456"**: 改用 `config.DEFAULT_INITIAL_PASSWORD` + 环境变量 `DEFAULT_INITIAL_PASSWORD`
+2. ✅ **`claim_ticket` 设置不存在的字段**: Ticket 模型新增 `assigned_at` 列
+3. ✅ **JWT expires_in 与实际不一致**: 2 处 `30*60` 改为 `JWT_EXPIRE_MINUTES * 60`
+4. ✅ **ChromaDB 版本不兼容**: 线程锁保护客户端创建，版本约束 `>=0.5.0,<2.0.0`
+5. ✅ **Embedding 零向量未检测**: 失败时抛出异常，rag_pipeline 优雅降级
+
+### P1 — 中等 → ✅ 全部修复
+
+6. ✅ **向量库不完整**: 后台向量化加重试（3次指数退避），批次间延迟 + 命名的非daemon线程日志
+7. ✅ **`reindex_all_faqs` 无回滚**: ChromaDB 1.5.x 改用 ID 逐个删除，避免 where={} 不兼容
+8. ✅ **LLM 异常被吞没**: 自定义 `LLMError` 异常，按错误类型区分（Timeout/Connection/HTTPError），rag_pipeline 显式捕获
+9. ✅ **限流中间件内存泄漏**: 空列表删除 key，每 5 分钟全量清理过期 IP
+10. ✅ **前端路由无鉴权守卫**: `beforeEach` 检查 token + role，未登录跳 /login，越权跳 /403
+
+### P2 — 技术债务 → ✅ 全部修复
+
+11. ✅ **Ollama Embedding 超时**: faq_service 批量导入分批处理（每10条休息3秒）
+12. ✅ **文本预处理空结果**: 全特殊字符输入提前检测，警告日志 + 返回原始文本
+13. ✅ **CORS 不安全组合**: `allow_origins` 改为具体 origin 列表（localhost:5173/8000）
+14. ✅ **未使用的 `admin_id` 参数**: 从 `create_user` 签名中移除
+15. ✅ **FAQ 导入器分类不一致**: 空分类和错误分类统一降级为"其他"+ warning（不再 reject）
 
 ## 常用命令
 
