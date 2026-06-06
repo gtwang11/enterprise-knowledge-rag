@@ -1,18 +1,50 @@
 """ChromaDB 向量存储封装 + 重试机制 + 线程安全 + 原子热切换"""
 
+import os
 import time
 import threading
 
 from config import (
-    CHROMA_DB_PATH, CHROMA_COLLECTION_NAME,
+    CHROMA_DB_PATH, CHROMA_COLLECTION_NAME, DATA_DIR,
     RAG_MAX_RETRIES, RAG_RETRY_INTERVAL_SECONDS, RAG_TOP_K,
 )
 
 _chroma_client = None
 _client_lock = threading.Lock()
 
+# 活跃集合名持久化文件
+_COLLECTION_NAME_FILE = os.path.join(DATA_DIR, ".active_collection")
+
+
+def _load_active_collection_name():
+    """从持久化文件加载活跃集合名，不存在则返回默认值"""
+    try:
+        if os.path.exists(_COLLECTION_NAME_FILE):
+            with open(_COLLECTION_NAME_FILE, "r", encoding="utf-8") as f:
+                saved = f.read().strip()
+            # 验证该集合是否真实存在
+            client = _get_client()
+            try:
+                client.get_collection(saved)
+                return saved
+            except Exception:
+                pass  # 集合不存在，回退到默认
+    except Exception:
+        pass
+    return CHROMA_COLLECTION_NAME
+
+
+def _save_active_collection_name(name: str):
+    """持久化当前活跃集合名"""
+    try:
+        with open(_COLLECTION_NAME_FILE, "w", encoding="utf-8") as f:
+            f.write(name)
+    except Exception:
+        pass  # 持久化失败不应影响主流程
+
+
 # 活跃集合名 — 原子热切换：reindex 先写入临时集合，完成后一键指向新集合
-_active_collection_name = CHROMA_COLLECTION_NAME
+_active_collection_name = _load_active_collection_name()
 _collection_name_lock = threading.RLock()
 
 # 重建状态（供 /api/faq/reindex/status 查询）
@@ -215,6 +247,7 @@ class VectorStore:
                 old_name = _active_collection_name
                 with _collection_name_lock:
                     _active_collection_name = temp_name
+                _save_active_collection_name(temp_name)  # 持久化，重启不丢失
                 app_logger.info(f"活跃集合已切换: {old_name} → {temp_name}")
 
                 # Phase 3: 删除旧集合（异步清理，即使失败也不影响查询）

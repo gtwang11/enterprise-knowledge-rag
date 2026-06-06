@@ -16,6 +16,12 @@ STOP_WORDS = set([
 class TextPreprocessor:
     """文本预处理"""
 
+    def clean(self, text: str) -> str:
+        """仅清洗特殊字符和多余空白，不去停用词，保留原始语义供 embedding 使用"""
+        cleaned = re.sub(r'[^一-龥a-zA-Z0-9\s]', ' ', text)
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        return cleaned if cleaned else text.strip()
+
     def process(self, text: str) -> str:
         # 去除特殊字符，保留中文、英文、数字
         cleaned = re.sub(r'[^一-龥a-zA-Z0-9\s]', ' ', text)

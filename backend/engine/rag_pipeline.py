@@ -19,8 +19,8 @@ class RAGPipeline:
 
     def execute(self, question: str) -> dict:
         """执行完整 RAG 流程"""
-        # Step 1: 文本预处理
-        cleaned = self.preprocessor.process(question)
+        # Step 1: 文本预处理（仅清洗特殊字符，保留原始语义用于 embedding）
+        cleaned = self.preprocessor.clean(question)
 
         # Step 2: Embedding 向量化
         if not cleaned:
@@ -29,7 +29,7 @@ class RAGPipeline:
                 "message": "无法识别问题内容，请用中文描述您的问题，或提交工单。",
             }
         try:
-            query_vector = self.embedder.embed(cleaned)
+            query_vector = self.embedder.embed(cleaned)  # 仅清洗特殊字符，不去停用词，与文档侧一致
         except Exception as e:
             from utils.logger import app_logger
             app_logger.error(f"Embedding 请求失败: {e}")
