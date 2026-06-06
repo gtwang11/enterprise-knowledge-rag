@@ -26,9 +26,9 @@ if ! ollama list &> /dev/null; then
 fi
 
 echo "[2/4] 检查模型..."
-if ! ollama list | grep -q "deepseek-llm-7b-chat"; then
-    echo "[下载] 正在下载 deepseek-llm-7b-chat:q4 模型（约4.5GB）..."
-    ollama pull deepseek-llm-7b-chat:q4
+if ! ollama list | grep -q "qwen2.5:7b"; then
+    echo "[下载] 正在下载 qwen2.5:7b 模型（约4.5GB）..."
+    ollama pull qwen2.5:7b
 fi
 
 if ! ollama list | grep -q "nomic-embed-text"; then
@@ -45,7 +45,7 @@ echo
 echo "后端启动后访问:"
 echo "  - API 文档: http://localhost:8000/docs"
 echo "  - 前端页面: http://localhost:8000"
-echo "  - 默认账号: admin / Admin@123456"
+echo "  - 默认账号: admin / 123456"
 echo
 python3 main.py &
 

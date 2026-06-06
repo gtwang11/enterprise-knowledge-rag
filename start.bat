@@ -75,7 +75,7 @@ echo ============================================
 echo   Starting backend server...
 echo   API docs:  http://localhost:8000/docs
 echo   Frontend:  http://localhost:8000
-echo   Login:     admin / Admin@123456
+echo   Login:     admin / 123456
 echo ============================================
 echo.
 
