@@ -23,8 +23,16 @@ class RAGPipeline:
         cleaned = self.preprocessor.process(question)
 
         # Step 2: Embedding 向量化
-        query_vector = self.embedder.embed(cleaned)
-        if not query_vector or all(v == 0.0 for v in query_vector):
+        if not cleaned:
+            return {
+                "has_answer": False, "similarity": 0.0, "references": [],
+                "message": "无法识别问题内容，请用中文描述您的问题，或提交工单。",
+            }
+        try:
+            query_vector = self.embedder.embed(cleaned)
+        except Exception as e:
+            from utils.logger import app_logger
+            app_logger.error(f"Embedding 请求失败: {e}")
             return {
                 "has_answer": False, "similarity": 0.0, "references": [],
                 "message": "AI 服务暂不可用，请稍后再试或提交工单。",

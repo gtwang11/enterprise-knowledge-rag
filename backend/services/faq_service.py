@@ -105,9 +105,10 @@ def query_faqs(db: Session, params: dict) -> tuple:
 
 
 def bulk_import_faqs(db: Session, items: list[dict], user_id: int) -> dict:
-    """先写入数据库，后台异步向量化"""
+    """先批量写入数据库，再同步向量化（带批控和重试）"""
+    from config import VECTORIZE_BATCH_SIZE, VECTORIZE_BATCH_DELAY
+
     faq_ids = []
-    # 批量插入，只 commit 一次
     for item in items:
         faq = Faq(
             question=item["question"],
@@ -118,33 +119,90 @@ def bulk_import_faqs(db: Session, items: list[dict], user_id: int) -> dict:
             created_by=user_id,
         )
         db.add(faq)
-        faq_ids.append(faq)  # 暂存对象引用
+        faq_ids.append(faq)
 
     db.commit()
-    # commit 后再取 id
     faq_ids = [f.id for f in faq_ids]
 
-    # 后台线程异步向量化
+    # 后台线程分批向量化，带延迟防止 Ollama 过载
     import threading
     def _vectorize_background():
         from engine.vector_store import get_vector_store
+        from engine.embedding_manager import EmbeddingManager
         from database import SessionLocal
-        store = get_vector_store()
-        bg_db = SessionLocal()
-        ok = 0
-        for fid in faq_ids:
-            try:
-                faq = bg_db.query(Faq).get(fid)
-                if faq:
-                    store.add_faq(fid, faq.question, faq.answer, faq.category, faq.keywords or "")
-                    ok += 1
-            except Exception as e:
-                from utils.logger import app_logger
-                app_logger.error(f"后台向量化失败 faq_id={fid}: {e}")
-        bg_db.close()
         from utils.logger import app_logger
-        app_logger.info(f"后台向量化完成: {ok}/{len(faq_ids)}")
+        import time
+
+        store = get_vector_store()
+        embedder = EmbeddingManager()
+        bg_db = SessionLocal()
+
+        ok = 0
+        fail = 0
+        total = len(faq_ids)
+
+        for batch_start in range(0, total, VECTORIZE_BATCH_SIZE):
+            batch = faq_ids[batch_start:batch_start + VECTORIZE_BATCH_SIZE]
+            for fid in batch:
+                try:
+                    faq = bg_db.query(Faq).get(fid)
+                    if faq:
+                        store.add_faq(fid, faq.question, faq.answer, faq.category, faq.keywords or "")
+                        ok += 1
+                except Exception as e:
+                    fail += 1
+                    app_logger.error(f"后台向量化失败 faq_id={fid}: {type(e).__name__}: {e}")
+            # 批次间休息，防止 Ollama 过载
+            if batch_start + VECTORIZE_BATCH_SIZE < total:
+                time.sleep(VECTORIZE_BATCH_DELAY)
+
+        bg_db.close()
+        app_logger.info(f"后台向量化完成: 成功={ok} 失败={fail} 总计={total}")
 
     threading.Thread(target=_vectorize_background, daemon=True).start()
 
     return {"success_count": len(faq_ids), "skip_count": 0}
+
+
+def reindex_all_faqs(db: Session) -> dict:
+    """重建全量 FAQ 向量索引：先清空向量库，再从数据库逐条重建"""
+    from engine.vector_store import get_vector_store
+    from engine.embedding_manager import EmbeddingManager
+    from utils.logger import app_logger
+    import time
+
+    store = get_vector_store()
+    embedder = EmbeddingManager()
+
+    # 清空向量库
+    try:
+        store.collection.delete(where={})
+        app_logger.info("向量库已清空，开始全量重建索引...")
+    except Exception as e:
+        app_logger.error(f"清空向量库失败: {e}")
+        return {"success": False, "message": f"清空向量库失败: {e}"}
+
+    # 逐条重建
+    faqs = db.query(Faq).filter(Faq.status == "published").all()
+    ok = 0
+    fail = 0
+
+    for i, faq in enumerate(faqs):
+        try:
+            store.add_faq(faq.id, faq.question, faq.answer, faq.category, faq.keywords or "")
+            ok += 1
+        except Exception as e:
+            fail += 1
+            app_logger.error(f"重建索引失败 faq_id={faq.id}: {type(e).__name__}: {e}")
+        # 每 50 条休息一下
+        if (i + 1) % 50 == 0:
+            time.sleep(2)
+
+    app_logger.info(f"全量重建索引完成: 成功={ok} 失败={fail} 总计={len(faqs)}")
+    return {
+        "success": True,
+        "total": len(faqs),
+        "indexed": ok,
+        "failed": fail,
+        "message": f"重建完成: 成功索引 {ok}/{len(faqs)} 条",
+    }

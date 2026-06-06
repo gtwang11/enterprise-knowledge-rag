@@ -1,6 +1,7 @@
-"""ChromaDB 向量存储封装 + 重试机制"""
+"""ChromaDB 向量存储封装 + 重试机制 + 线程安全"""
 
 import time
+import threading
 
 from config import (
     CHROMA_DB_PATH, CHROMA_COLLECTION_NAME,
@@ -8,13 +9,16 @@ from config import (
 )
 
 _chroma_client = None
+_client_lock = threading.Lock()
 
 
 def _get_client():
     global _chroma_client
     if _chroma_client is None:
-        import chromadb
-        _chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        with _client_lock:
+            if _chroma_client is None:  # double-checked locking
+                import chromadb
+                _chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
     return _chroma_client
 
 

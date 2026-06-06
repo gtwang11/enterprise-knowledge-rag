@@ -45,6 +45,10 @@ EMBEDDING_DIMENSION = 768
 # ChromaDB 参数
 CHROMA_COLLECTION_NAME = "faq_vectors"
 
+# 向量化批处理（防止 Ollama 过载）
+VECTORIZE_BATCH_SIZE = 10
+VECTORIZE_BATCH_DELAY = 3  # 批次间休息秒数
+
 # 分页
 DEFAULT_PAGE_SIZE = 20
 

@@ -116,3 +116,16 @@ def import_faqs(file: UploadFile = File(...), db: Session = Depends(get_db),
     result["errors"] = errors
     return ApiResponse(code=200, message=f"成功导入 {result['success_count']} 条，跳过 {result['skip_count']} 条",
                        data=result, timestamp=int(time.time() * 1000))
+
+
+@router.post("/reindex")
+def reindex_faqs(db: Session = Depends(get_db),
+                  admin: User = Depends(require_role("admin"))):
+    """重建全量 FAQ 向量索引：清空向量库后逐条重建"""
+    result = faq_service.reindex_all_faqs(db)
+    if result["success"]:
+        return ApiResponse(code=200, message=result["message"], data=result,
+                           timestamp=int(time.time() * 1000))
+    else:
+        return ApiResponse(code=500, message=result["message"], data=result,
+                           timestamp=int(time.time() * 1000))
