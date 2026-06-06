@@ -10,6 +10,20 @@
 | **架构** | FastAPI 后端 + Vue 3 前端 + ChromaDB 向量库 + Ollama LLM |
 | **Python** | 3.12 (venv 在 `venv/`) |
 | **Node** | `frontend/` 目录 |
+| **背景** | 见 [PROJECT-BRIEF.md](./PROJECT-BRIEF.md) |
+| **环境配置** | 见 [SETUP-CHECKLIST.md](./SETUP-CHECKLIST.md) |
+| **需求文档** | [docs/SRS.md](./docs/SRS.md) |
+| **架构文档** | [docs/SAD.md](./docs/SAD.md) |
+
+## Agent 工作环境
+
+| 工具 | 环境 | 注意 |
+|------|------|------|
+| **Bash** | Git Bash (Unix-like) | 正斜杠路径，POSIX 语法 |
+| **PowerShell** | Windows PowerShell 5.1 | 反斜杠路径，无 `&&`/`||`，用 `; if ($?) {...}` |
+| **Python** | `venv/Scripts/python.exe` | 3.12，依赖在 `backend/requirements.txt` |
+
+**原则**：优先用专用工具（Read/Write/Edit/Glob/Grep），避免用 Bash/PowerShell 做文件操作。
 
 ## 目录结构
 
@@ -24,7 +38,7 @@ backend/
 │   ├── rag_pipeline.py       # RAG 主流程：预处理→Embedding→检索→判阈→LLM
 │   ├── vector_store.py       # ChromaDB 封装（PersistentClient + 重试）
 │   ├── embedding_manager.py  # Ollama nomic-embed-text 调用（768维）
-│   ├── llm_manager.py        # Ollama qwen2.5:7b 调用
+│   ├── llm_manager.py        # Ollama qwen2.5:7b 调用 + LLMError 异常
 │   ├── text_preprocessor.py  # jieba 分词 + 正则清洗
 │   └── prompts.py            # System Prompt + QA 模板
 ├── models/              # SQLAlchemy ORM 模型
@@ -32,7 +46,7 @@ backend/
 ├── routers/             # FastAPI 路由层
 ├── services/            # 业务逻辑层
 ├── utils/               # 工具（安全、日志、导入解析器）
-├── middleware/           # 中间件（频率限制）
+├── middleware/           # 中间件（频率限制，5分钟清理过期IP）
 ├── data/                # 运行时数据（SQLite DB + ChromaDB）— gitignore
 └── logs/                # 应用日志 — gitignore
 
@@ -41,7 +55,7 @@ frontend/
 │   ├── api/             # Axios API 封装（qa.ts, faq.ts, auth.ts ...）
 │   ├── views/           # Vue 页面组件
 │   │   └── qa/QaView.vue    # 自助问答页面
-│   ├── router/          # Vue Router + 权限守卫
+│   ├── router/          # Vue Router + beforeEach 鉴权守卫
 │   ├── stores/          # Pinia 状态管理
 │   └── layouts/         # 布局组件（Navbar, Sidebar）
 └── vite.config.ts       # Vite 配置 + API 代理
@@ -58,6 +72,10 @@ RAG_TOP_K = 5
 RAG_SIMILARITY_THRESHOLD = 0.65
 CHROMA_COLLECTION_NAME = "faq_vectors"
 LLM_TIMEOUT_SECONDS = 30
+JWT_EXPIRE_MINUTES = 480
+DEFAULT_INITIAL_PASSWORD = os.getenv("DEFAULT_INITIAL_PASSWORD", "123456")
+VECTORIZE_BATCH_SIZE = 10
+VECTORIZE_BATCH_DELAY = 3
 ```
 
 ## Q&A 自助问答流程（核心链路）
@@ -66,43 +84,23 @@ LLM_TIMEOUT_SECONDS = 30
 用户提问 → POST /api/qa/ask
   → qa_service.ask_question()
     → RAGPipeline.execute(question)
-      1. TextPreprocessor.process()    # jieba 分词 + 去停用词
-      2. EmbeddingManager.embed()      # 调用 Ollama nomic-embed-text → 768维向量
+      1. TextPreprocessor.process()    # jieba 分词 + 去停用词，空结果→返回原文
+      2. EmbeddingManager.embed()      # 调用 Ollama nomic-embed-text → 768维向量，失败抛异常
       3. VectorStore.search()          # ChromaDB 余弦相似度检索 Top-K
       4. 阈值判断 (>= 0.65)
-      5. LLMManager.generate()         # 调用 Ollama qwen2.5:7b 生成回答
+      5. LLMManager.generate()         # 调用 Ollama qwen2.5:7b，失败抛 LLMError（含 fallback）
     → 写入 qa_history 表 + 清理旧记录(保留最近20条)
 ```
 
-## 代码审查报告
+## 修复历史 (2026-06-06)
 
-完整审查报告见 **[PROJECT_REVIEW.md](./PROJECT_REVIEW.md)**，包含 22 项问题和修复建议。
+15 项问题全部修复，详见 `git log fix/chromadb-compat`：
 
-## 当前已知问题 (2026-06-06)
-
-### P0 — 严重 → ✅ 全部修复
-
-1. ✅ **硬编码初始密码 "123456"**: 改用 `config.DEFAULT_INITIAL_PASSWORD` + 环境变量 `DEFAULT_INITIAL_PASSWORD`
-2. ✅ **`claim_ticket` 设置不存在的字段**: Ticket 模型新增 `assigned_at` 列
-3. ✅ **JWT expires_in 与实际不一致**: 2 处 `30*60` 改为 `JWT_EXPIRE_MINUTES * 60`
-4. ✅ **ChromaDB 版本不兼容**: 线程锁保护客户端创建，版本约束 `>=0.5.0,<2.0.0`
-5. ✅ **Embedding 零向量未检测**: 失败时抛出异常，rag_pipeline 优雅降级
-
-### P1 — 中等 → ✅ 全部修复
-
-6. ✅ **向量库不完整**: 后台向量化加重试（3次指数退避），批次间延迟 + 命名的非daemon线程日志
-7. ✅ **`reindex_all_faqs` 无回滚**: ChromaDB 1.5.x 改用 ID 逐个删除，避免 where={} 不兼容
-8. ✅ **LLM 异常被吞没**: 自定义 `LLMError` 异常，按错误类型区分（Timeout/Connection/HTTPError），rag_pipeline 显式捕获
-9. ✅ **限流中间件内存泄漏**: 空列表删除 key，每 5 分钟全量清理过期 IP
-10. ✅ **前端路由无鉴权守卫**: `beforeEach` 检查 token + role，未登录跳 /login，越权跳 /403
-
-### P2 — 技术债务 → ✅ 全部修复
-
-11. ✅ **Ollama Embedding 超时**: faq_service 批量导入分批处理（每10条休息3秒）
-12. ✅ **文本预处理空结果**: 全特殊字符输入提前检测，警告日志 + 返回原始文本
-13. ✅ **CORS 不安全组合**: `allow_origins` 改为具体 origin 列表（localhost:5173/8000）
-14. ✅ **未使用的 `admin_id` 参数**: 从 `create_user` 签名中移除
-15. ✅ **FAQ 导入器分类不一致**: 空分类和错误分类统一降级为"其他"+ warning（不再 reject）
+| 优先级 | 要点 |
+|--------|------|
+| P0 | 硬编码密码→环境变量、Ticket.assigned_at 列、JWT expires_in→480min、ChromaDB 1.5.x 兼容、零向量检测 |
+| P1 | 向量化 3 次重试、reindex ID 删除、LLMError 异常体系、限流定期清理、前端 beforeEach 守卫 |
+| P2 | 批量导入分批+延迟、空文本预处理、CORS 具体 origins、移除未用参数、FAQ 分类统一降级 |
 
 ## 常用命令
 
