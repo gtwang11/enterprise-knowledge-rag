@@ -179,48 +179,22 @@ def bulk_import_faqs(db: Session, items: list[dict], user_id: int) -> dict:
 
 
 def reindex_all_faqs(db: Session) -> dict:
-    """重建全量 FAQ 向量索引：先清空向量库，再从数据库逐条重建"""
+    """后台全量重建向量索引 — 热切换，查询零中断
+
+    流程：
+    1. 从 DB 加载全部 published FAQ
+    2. 后台线程写入临时集合 (faq_vectors_v2_xxx)
+    3. 写入完成后原子切换活跃集合
+    4. 删除旧集合
+    """
     from engine.vector_store import get_vector_store
-    from engine.embedding_manager import EmbeddingManager
     from utils.logger import app_logger
-    import time
+
+    faqs = db.query(Faq).filter(Faq.status == "published").all()
+    if not faqs:
+        return {"success": False, "message": "没有已发布的 FAQ，无需重建"}
 
     store = get_vector_store()
-    embedder = EmbeddingManager()
-
-    # 清空向量库（ChromaDB 1.5.x 需按 ID 逐个删除）
-    try:
-        existing = store.collection.get(include=[])
-        if existing and existing.get("ids"):
-            store.collection.delete(ids=existing["ids"])
-            app_logger.info(f"向量库已清空 {len(existing['ids'])} 条，开始全量重建索引...")
-        else:
-            app_logger.info("向量库为空，直接开始全量重建索引...")
-    except Exception as e:
-        app_logger.error(f"清空向量库失败: {e}")
-        return {"success": False, "message": f"清空向量库失败: {e}"}
-
-    # 逐条重建
-    faqs = db.query(Faq).filter(Faq.status == "published").all()
-    ok = 0
-    fail = 0
-
-    for i, faq in enumerate(faqs):
-        try:
-            store.add_faq(faq.id, faq.question, faq.answer, faq.category, faq.keywords or "")
-            ok += 1
-        except Exception as e:
-            fail += 1
-            app_logger.error(f"重建索引失败 faq_id={faq.id}: {type(e).__name__}: {e}")
-        # 每 50 条休息一下
-        if (i + 1) % 50 == 0:
-            time.sleep(2)
-
-    app_logger.info(f"全量重建索引完成: 成功={ok} 失败={fail} 总计={len(faqs)}")
-    return {
-        "success": True,
-        "total": len(faqs),
-        "indexed": ok,
-        "failed": fail,
-        "message": f"重建完成: 成功索引 {ok}/{len(faqs)} 条",
-    }
+    result = store.rebuild_index_background(faqs)
+    app_logger.info(f"全量重建索引已启动: {result}")
+    return result

@@ -118,14 +118,23 @@ def import_faqs(file: UploadFile = File(...), db: Session = Depends(get_db),
                        data=result, timestamp=int(time.time() * 1000))
 
 
-@router.post("/reindex")
+@router.post("/reindex", status_code=202)
 def reindex_faqs(db: Session = Depends(get_db),
                   admin: User = Depends(require_role("admin"))):
-    """重建全量 FAQ 向量索引：清空向量库后逐条重建"""
+    """后台全量重建向量索引 — 热切换，查询不中断"""
     result = faq_service.reindex_all_faqs(db)
     if result["success"]:
-        return ApiResponse(code=200, message=result["message"], data=result,
+        return ApiResponse(code=202, message=result["message"], data=result,
                            timestamp=int(time.time() * 1000))
     else:
-        return ApiResponse(code=500, message=result["message"], data=result,
+        return ApiResponse(code=409, message=result["message"], data=result,
                            timestamp=int(time.time() * 1000))
+
+
+@router.get("/reindex/status")
+def reindex_status(user: User = Depends(require_role("admin", "expert"))):
+    """查询重建进度"""
+    from engine.vector_store import get_reindex_status
+    status = get_reindex_status()
+    return ApiResponse(code=200, message="success", data=status,
+                       timestamp=int(time.time() * 1000))

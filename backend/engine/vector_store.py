@@ -1,4 +1,4 @@
-"""ChromaDB 向量存储封装 + 重试机制 + 线程安全"""
+"""ChromaDB 向量存储封装 + 重试机制 + 线程安全 + 原子热切换"""
 
 import time
 import threading
@@ -10,6 +10,26 @@ from config import (
 
 _chroma_client = None
 _client_lock = threading.Lock()
+
+# 活跃集合名 — 原子热切换：reindex 先写入临时集合，完成后一键指向新集合
+_active_collection_name = CHROMA_COLLECTION_NAME
+_collection_name_lock = threading.RLock()
+
+# 重建状态（供 /api/faq/reindex/status 查询）
+_reindex_status = {
+    "running": False,
+    "total": 0,
+    "indexed": 0,
+    "failed": 0,
+    "phase": "idle",  # idle | building | swapping | done | error
+    "error": None,
+}
+
+
+def get_reindex_status() -> dict:
+    """查询当前重建状态"""
+    with _collection_name_lock:
+        return dict(_reindex_status)
 
 
 def _get_client():
@@ -27,7 +47,7 @@ def get_vector_store():
 
 
 class VectorStore:
-    """ChromaDB 封装，含重试机制"""
+    """ChromaDB 封装，含重试机制 + 活跃集合热切换"""
 
     def _retry(self, func, *args, **kwargs):
         """带重试的操作包装器"""
@@ -47,13 +67,23 @@ class VectorStore:
     @property
     def collection(self):
         client = _get_client()
+        with _collection_name_lock:
+            name = _active_collection_name
         return client.get_or_create_collection(
-            name=CHROMA_COLLECTION_NAME,
+            name=name,
+            metadata={"hnsw:space": "cosine"},
+        )
+
+    def _get_collection_by_name(self, name: str):
+        """获取指定名称的 collection"""
+        client = _get_client()
+        return client.get_or_create_collection(
+            name=name,
             metadata={"hnsw:space": "cosine"},
         )
 
     def add_faq(self, faq_id: int, question: str, answer: str, category: str, keywords: str):
-        """添加 FAQ 向量"""
+        """添加 FAQ 向量（写入活跃集合）"""
         text = f"{question} {category} {keywords} {answer[:200]}"
         from engine.embedding_manager import EmbeddingManager
         embedder = EmbeddingManager()
@@ -73,13 +103,13 @@ class VectorStore:
         )
 
     def delete_faq(self, faq_id: int):
-        """删除 FAQ 向量"""
+        """删除 FAQ 向量（从活跃集合）"""
         self._retry(
             lambda: self.collection.delete(ids=[str(faq_id)])
         )
 
     def search(self, query_vector: list[float], k: int = None) -> list:
-        """向量相似度检索，返回 [{"faq_id", "question", "similarity"}, ...]"""
+        """向量相似度检索 — 始终从活跃集合查询，不受重建影响"""
         if k is None:
             k = RAG_TOP_K
 
@@ -96,7 +126,6 @@ class VectorStore:
             for i, faq_id_str in enumerate(results["ids"][0]):
                 metadata = results["metadatas"][0][i] if results.get("metadatas") else {}
                 distance = results["distances"][0][i] if results.get("distances") else 0
-                # ChromaDB 返回的是距离（cosine distance），转为相似度
                 similarity = 1.0 - distance
 
                 items.append({
@@ -106,3 +135,122 @@ class VectorStore:
                 })
 
         return items
+
+    def rebuild_index_background(self, faqs: list) -> dict:
+        """后台全量重建索引 — 写入临时集合，完成后原子切换，零停机
+
+        faqs: list of Faq ORM objects (需含 id, question, answer, category, keywords)
+        返回: {"thread_id": str, "message": str}
+        """
+        global _reindex_status
+
+        with _collection_name_lock:
+            if _reindex_status["running"]:
+                return {"success": False, "message": "已有重建任务正在运行，请等待完成后再试"}
+            _reindex_status.update({
+                "running": True, "total": len(faqs), "indexed": 0,
+                "failed": 0, "phase": "building", "error": None,
+            })
+
+        import uuid
+        thread_id = str(uuid.uuid4())[:8]
+
+        def _rebuild():
+            global _active_collection_name, _reindex_status
+            from engine.embedding_manager import EmbeddingManager
+            from utils.logger import app_logger
+
+            embedder = EmbeddingManager()
+            client = _get_client()
+            temp_name = f"{CHROMA_COLLECTION_NAME}_v2_{thread_id}"
+
+            try:
+                # Phase 1: 写入临时集合
+                temp_col = client.get_or_create_collection(
+                    name=temp_name,
+                    metadata={"hnsw:space": "cosine"},
+                )
+
+                ok = 0
+                fail = 0
+                batch_size = 50
+                total = len(faqs)
+
+                for i, faq in enumerate(faqs):
+                    try:
+                        text = f"{faq.question} {faq.category} {faq.keywords or ''} {faq.answer[:200]}"
+                        vector = embedder.embed(text)
+                        temp_col.add(
+                            ids=[str(faq.id)],
+                            embeddings=[vector],
+                            metadatas=[{
+                                "faq_id": faq.id,
+                                "question": faq.question[:500],
+                                "category": faq.category,
+                            }],
+                            documents=[faq.question],
+                        )
+                        ok += 1
+                    except Exception as e:
+                        fail += 1
+                        app_logger.error(f"重建索引失败 faq_id={faq.id}: {type(e).__name__}: {e}")
+
+                    # 更新进度
+                    with _collection_name_lock:
+                        _reindex_status["indexed"] = ok
+                        _reindex_status["failed"] = fail
+
+                    # 批次间休息
+                    if (i + 1) % batch_size == 0:
+                        time.sleep(2)
+
+                app_logger.info(f"临时集合构建完成: {temp_name} 成功={ok} 失败={fail}")
+
+                # Phase 2: 原子切换
+                with _collection_name_lock:
+                    _reindex_status["phase"] = "swapping"
+                    _reindex_status["indexed"] = ok
+                    _reindex_status["failed"] = fail
+
+                old_name = _active_collection_name
+                with _collection_name_lock:
+                    _active_collection_name = temp_name
+                app_logger.info(f"活跃集合已切换: {old_name} → {temp_name}")
+
+                # Phase 3: 删除旧集合（异步清理，即使失败也不影响查询）
+                try:
+                    client.delete_collection(name=old_name)
+                    app_logger.info(f"旧集合已删除: {old_name}")
+                except Exception as e:
+                    app_logger.warning(f"删除旧集合失败（不影响查询）: {e}")
+
+                with _collection_name_lock:
+                    _reindex_status.update({
+                        "running": False, "phase": "done",
+                        "indexed": ok, "failed": fail,
+                    })
+
+            except Exception as e:
+                app_logger.error(f"后台重建索引失败: {e}")
+                # 清理失败的临时集合
+                try:
+                    client.delete_collection(name=temp_name)
+                except Exception:
+                    pass
+                with _collection_name_lock:
+                    _reindex_status.update({
+                        "running": False, "phase": "error",
+                        "error": str(e),
+                    })
+
+        threading.Thread(
+            target=_rebuild, daemon=True,
+            name=f"reindex-{thread_id}",
+        ).start()
+
+        return {
+            "success": True,
+            "thread_id": thread_id,
+            "total": len(faqs),
+            "message": f"后台重建已启动 (thread={thread_id})，预计 {len(faqs) * 0.5:.0f}s 完成，期间查询不受影响",
+        }
