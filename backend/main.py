@@ -1,9 +1,11 @@
 """FastAPI 应用入口"""
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from database import init_db
 
@@ -52,10 +54,24 @@ app.include_router(dashboard.router)
 app.include_router(health.router)
 
 # 生产模式：托管前端静态文件（如果存在）
-import os
-static_dir = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
-if os.path.exists(static_dir):
-    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+static_dir = (Path(__file__).resolve().parent.parent / "frontend" / "dist").resolve()
+index_file = static_dir / "index.html"
+
+if static_dir.exists() and index_file.exists():
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_frontend(full_path: str):
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        requested_path = (static_dir / full_path).resolve()
+        if (
+            full_path
+            and requested_path.is_file()
+            and (requested_path == static_dir or static_dir in requested_path.parents)
+        ):
+            return FileResponse(requested_path)
+
+        return FileResponse(index_file)
 
 
 if __name__ == "__main__":
