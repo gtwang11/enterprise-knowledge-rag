@@ -33,7 +33,7 @@
             </div>
           </div>
         </template>
-        <template v-if="userStore.role === 'operator' && ticket.status === 'pending_confirmation' && ticket.submitter_id === currentUserId">
+        <template v-if="canConfirmTicket">
           <el-button type="success" @click="handleConfirm" :loading="actionLoading">确认解决</el-button>
           <el-button type="warning" @click="handleUnconfirm" :loading="actionLoading">未解决</el-button>
         </template>
@@ -64,7 +64,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { ticketApi } from '@/api/ticket'
@@ -82,6 +82,11 @@ const solution = ref('')
 const rejectReason = ref('')
 const publishForm = reactive({ question: '', answer: '', category: '工单转换' })
 const currentUserId = ref(0)
+const canConfirmTicket = computed(() => {
+  return ['operator', 'admin'].includes(userStore.role)
+    && ticket.value?.status === 'pending_confirmation'
+    && ticket.value?.submitter_id === currentUserId.value
+})
 
 // Parse user ID from JWT token (stored in localStorage)
 function getUserIdFromToken(): number {

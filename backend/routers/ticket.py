@@ -59,7 +59,7 @@ def list_tickets(
 
 @router.post("")
 def create_ticket(req: TicketCreate, db: Session = Depends(get_db),
-                  user: User = Depends(require_role("operator", "admin"))):
+                  user: User = Depends(require_role("operator"))):
     ticket = ticket_service.create_ticket(db, user.id, req.model_dump())
     return ApiResponse(code=201, message="success", data=_format_ticket(ticket),
                        timestamp=int(time.time() * 1000))
@@ -136,7 +136,7 @@ def reject_ticket(ticket_id: int, req: RejectRequest, db: Session = Depends(get_
 
 @router.post("/{ticket_id}/confirm")
 def confirm_ticket(ticket_id: int, db: Session = Depends(get_db),
-                   user: User = Depends(require_role("operator"))):
+                   user: User = Depends(require_role("operator", "admin"))):
     try:
         ticket = ticket_service.confirm_ticket(db, ticket_id, user.id)
         return ApiResponse(code=200, message="success", data=_format_ticket(ticket),
@@ -147,7 +147,7 @@ def confirm_ticket(ticket_id: int, db: Session = Depends(get_db),
 
 @router.post("/{ticket_id}/unconfirm")
 def unconfirm_ticket(ticket_id: int, db: Session = Depends(get_db),
-                     user: User = Depends(require_role("operator"))):
+                     user: User = Depends(require_role("operator", "admin"))):
     try:
         ticket = ticket_service.unconfirm_ticket(db, ticket_id, user.id)
         return ApiResponse(code=200, message="success", data=_format_ticket(ticket),

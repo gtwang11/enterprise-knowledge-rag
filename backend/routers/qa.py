@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/qa", tags=["智能问答"])
 
 @router.post("/ask")
 def ask(req: AskRequest, db: Session = Depends(get_db),
-        user: User = Depends(require_role("operator", "admin", "expert"))):
+        user: User = Depends(require_role("operator"))):
     result = qa_service.ask_question(db, user.id, req.question)
     return ApiResponse(code=200, message="success", data=result,
                        timestamp=int(time.time() * 1000))
@@ -27,7 +27,7 @@ def history(
     start_date: str = None, end_date: str = None,
     page: int = 1, page_size: int = 20,
     db: Session = Depends(get_db),
-    user: User = Depends(require_role("operator", "admin", "expert")),
+    user: User = Depends(require_role("operator")),
 ):
     params = {"start_date": start_date, "end_date": end_date,
               "page": page, "page_size": page_size}

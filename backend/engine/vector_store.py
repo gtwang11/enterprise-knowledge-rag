@@ -3,9 +3,12 @@
 import os
 import time
 import threading
+from array import array
+import math
+import sqlite3
 
 from config import (
-    CHROMA_DB_PATH, CHROMA_COLLECTION_NAME, DATA_DIR,
+    CHROMA_DB_PATH, CHROMA_COLLECTION_NAME, DATA_DIR, DB_PATH,
     RAG_MAX_RETRIES, RAG_RETRY_INTERVAL_SECONDS, RAG_TOP_K,
 )
 
@@ -44,7 +47,6 @@ def _save_active_collection_name(name: str):
 
 
 # 活跃集合名 — 原子热切换：reindex 先写入临时集合，完成后一键指向新集合
-_active_collection_name = _load_active_collection_name()
 _collection_name_lock = threading.RLock()
 
 # 重建状态（供 /api/faq/reindex/status 查询）
@@ -72,6 +74,9 @@ def _get_client():
                 import chromadb
                 _chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
     return _chroma_client
+
+
+_active_collection_name = _load_active_collection_name()
 
 
 def get_vector_store():
@@ -103,7 +108,7 @@ class VectorStore:
             name = _active_collection_name
         return client.get_or_create_collection(
             name=name,
-            metadata={"hnsw:space": "cosine"},
+            metadata={"hnsw:space": "cosine", "hnsw:sync_threshold": 50},
         )
 
     def _get_collection_by_name(self, name: str):
@@ -111,7 +116,7 @@ class VectorStore:
         client = _get_client()
         return client.get_or_create_collection(
             name=name,
-            metadata={"hnsw:space": "cosine"},
+            metadata={"hnsw:space": "cosine", "hnsw:sync_threshold": 50},
         )
 
     def add_faq(self, faq_id: int, question: str, answer: str, category: str, keywords: str):
@@ -120,6 +125,7 @@ class VectorStore:
         from engine.embedding_manager import EmbeddingManager
         embedder = EmbeddingManager()
         vector = embedder.embed(text)
+        self._save_fallback_embedding(faq_id, vector)
 
         self._retry(
             lambda: self.collection.add(
@@ -136,6 +142,7 @@ class VectorStore:
 
     def delete_faq(self, faq_id: int):
         """删除 FAQ 向量（从活跃集合）"""
+        self._delete_fallback_embedding(faq_id)
         self._retry(
             lambda: self.collection.delete(ids=[str(faq_id)])
         )
@@ -145,13 +152,16 @@ class VectorStore:
         if k is None:
             k = RAG_TOP_K
 
-        results = self._retry(
-            lambda: self.collection.query(
+        try:
+            results = self.collection.query(
                 query_embeddings=[query_vector],
                 n_results=k,
                 include=["metadatas", "distances", "documents"],
             )
-        )
+        except Exception as e:
+            from utils.logger import app_logger
+            app_logger.warning(f"Chroma 检索失败，切换 SQLite 向量兜底检索: {type(e).__name__}: {e}")
+            return self._fallback_search(query_vector, k)
 
         items = []
         if results and results.get("ids") and results["ids"][0]:
@@ -167,6 +177,72 @@ class VectorStore:
                 })
 
         return items
+
+    def _save_fallback_embedding(self, faq_id: int, vector: list[float]):
+        blob = array("f", [float(x) for x in vector]).tobytes()
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS faq_embeddings (
+                    faq_id INTEGER PRIMARY KEY,
+                    embedding BLOB NOT NULL,
+                    dim INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO faq_embeddings (faq_id, embedding, dim, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (faq_id, blob, len(vector)),
+            )
+
+    def _delete_fallback_embedding(self, faq_id: int):
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("DELETE FROM faq_embeddings WHERE faq_id = ?", (faq_id,))
+
+    def _fallback_search(self, query_vector: list[float], k: int) -> list:
+        qnorm = math.sqrt(sum(x * x for x in query_vector)) or 1.0
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT e.faq_id, e.embedding, e.dim, f.question, f.tags
+                FROM faq_embeddings e
+                JOIN faq f ON f.id = e.faq_id
+                WHERE f.status = 'published'
+                """
+            ).fetchall()
+
+        scored = []
+        for row in rows:
+            vec = array("f")
+            vec.frombytes(row["embedding"])
+            dim = int(row["dim"] or len(vec))
+            if len(vec) != dim:
+                vec = vec[:dim]
+
+            dot = 0.0
+            vnorm_sq = 0.0
+            for q, v in zip(query_vector, vec):
+                dot += q * v
+                vnorm_sq += v * v
+            similarity = dot / (qnorm * (math.sqrt(vnorm_sq) or 1.0))
+            tags = row["tags"] or ""
+            if "官方技术文档" in tags or "云厂商故障处理文档" in tags:
+                similarity += 0.03
+            elif "历史模拟FAQ" in tags or "AI生成数据" in tags:
+                similarity -= 0.05
+            scored.append({
+                "faq_id": int(row["faq_id"]),
+                "question": row["question"],
+                "similarity": similarity,
+            })
+
+        scored.sort(key=lambda item: item["similarity"], reverse=True)
+        return scored[:k]
 
     def rebuild_index_background(self, faqs: list) -> dict:
         """后台全量重建索引 — 写入临时集合，完成后原子切换，零停机
@@ -200,7 +276,7 @@ class VectorStore:
                 # Phase 1: 写入临时集合
                 temp_col = client.get_or_create_collection(
                     name=temp_name,
-                    metadata={"hnsw:space": "cosine"},
+                    metadata={"hnsw:space": "cosine", "hnsw:sync_threshold": 50},
                 )
 
                 ok = 0

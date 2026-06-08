@@ -12,7 +12,7 @@
       active-text-color="#409EFF"
       router
     >
-      <el-menu-item index="/qa">
+      <el-menu-item v-if="userStore.role === 'operator'" index="/qa">
         <el-icon><ChatDotRound /></el-icon>
         <span>自助问答</span>
       </el-menu-item>

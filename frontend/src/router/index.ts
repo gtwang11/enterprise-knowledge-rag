@@ -9,14 +9,14 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/',
-    redirect: '/qa',
+    redirect: '/dashboard',
     meta: { requiresAuth: true },
   },
   {
     path: '/qa',
     name: 'Qa',
     component: () => import('@/views/qa/QaView.vue'),
-    meta: { requiresAuth: true, roles: ['operator', 'admin', 'expert'] },
+    meta: { requiresAuth: true, roles: ['operator'] },
   },
   {
     path: '/tickets/my',
@@ -94,7 +94,7 @@ const routes: RouteRecordRaw[] = [
     path: '/qa/history',
     name: 'QaHistory',
     component: () => import('@/views/qa/QaHistoryView.vue'),
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, roles: ['operator'] },
   },
   {
     path: '/profile',
