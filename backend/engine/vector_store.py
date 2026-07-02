@@ -121,7 +121,7 @@ class VectorStore:
 
     def add_faq(self, faq_id: int, question: str, answer: str, category: str, keywords: str):
         """添加 FAQ 向量（写入活跃集合）"""
-        text = f"{question} {category} {keywords} {answer[:200]}"
+        text = question  # 仅用问题文本向量化：与查询侧对称，避免答案/分类/URL 稀释匹配度
         from engine.embedding_manager import EmbeddingManager
         embedder = EmbeddingManager()
         vector = embedder.embed(text)
@@ -286,7 +286,7 @@ class VectorStore:
 
                 for i, faq in enumerate(faqs):
                     try:
-                        text = f"{faq.question} {faq.category} {faq.keywords or ''} {faq.answer[:200]}"
+                        text = faq.question  # 仅用问题文本向量化（与查询侧对称）
                         vector = embedder.embed(text)
                         temp_col.add(
                             ids=[str(faq.id)],

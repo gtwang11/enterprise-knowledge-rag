@@ -1,137 +1,89 @@
-# CLAUDE.md — 运维数字员工门户
+# 运维数字员工门户
 
-> Claude Code Agent 项目速查手册。接手任务先读这个，详细内容见 `docs/`。
-
-## 项目概览
-
-| 项 | 内容 |
-|----|------|
-| **名称** | 运维数字员工门户 (Enterprise Knowledge RAG) |
-| **做什么** | 本地大模型 + RAG 知识库的运维智能问答系统，含工单流转闭环 |
-| **架构** | Vue 3 前端 → FastAPI 后端 → SQLite + ChromaDB + Ollama |
-| **Python** | 3.12，venv 在 `venv/` |
-| **Node** | 18+，`frontend/` |
-
-### 文档索引
-
-| 文档 | 说明 |
-|------|------|
-| [系统概述](docs/系统概述.md) | 业务背景、角色、核心流程、约束 |
-| [SRS](docs/SRS.md) | 软件需求规格说明书 |
-| [SAD](docs/SAD.md) | 系统架构设计说明书 |
-| [详细设计](docs/详细设计说明书.md) | 模块接口、算法、状态机 |
-| [数据库设计](docs/数据库设计说明书.md) | ER 图、9 张表结构、索引 |
-| [环境配置](docs/环境配置清单.md) | 硬件/软件安装/启动步骤 |
-| [测试报告](docs/测试报告.md) | 81 用例、15 缺陷修复记录 |
-| [用户手册](docs/用户手册.md) | 三角色操作指南 |
-| [项目总结](docs/项目总结报告.md) | 踩坑记录、不足反思 |
-| [可行性研究](docs/可行性研究报告.md) | 技经操可行性评估 |
-| [开发计划](docs/项目开发计划.md) | WBS + 时间线 |
-
-## Agent 工作环境
-
-| 工具 | 环境 | 注意 |
-|------|------|------|
-| **Bash** | Git Bash | 正斜杠路径，POSIX 语法 |
-| **PowerShell** | Windows PS 5.1 | 反斜杠路径，无 `&&`/`\|\|`，用 `; if ($?) {...}` |
-| **Python** | `venv/Scripts/python.exe` | 3.12，依赖 `backend/requirements.txt` |
-
-原则：文件操作用专用工具（Read/Write/Edit/Glob/Grep），不用 Bash/PS。
-
-## 目录结构
-
-```
-backend/
-├── main.py              # FastAPI 入口，注册路由，CORS
-├── config.py            # 集中配置
-├── database.py          # SQLAlchemy 引擎 + SessionLocal (WAL 模式)
-├── dependencies.py      # 依赖注入（鉴权）
-├── seed_data.py         # 种子数据：admin + 22 条 FAQ
-├── engine/
-│   ├── rag_pipeline.py       # RAG 管线编排
-│   ├── vector_store.py       # ChromaDB 封装 + 原子热切换
-│   ├── embedding_manager.py  # Ollama nomic-embed-text（768 维）
-│   ├── llm_manager.py        # Ollama LLM 调用 + LLMError 异常
-│   ├── text_preprocessor.py  # jieba 分词 + 正则清洗
-│   └── prompts.py            # System Prompt + QA 模板
-├── models/              # SQLAlchemy ORM（9 张表）
-├── schemas/             # Pydantic 请求/响应 Schema
-├── routers/             # FastAPI 路由（36 个端点）
-├── services/            # 业务逻辑层
-├── utils/               # 安全、日志、导入解析器
-├── middleware/           # 限流中间件
-├── data/                # SQLite DB + ChromaDB — gitignore
-└── logs/                # 应用日志 — gitignore
-
-frontend/
-├── src/
-│   ├── api/             # Axios API 封装
-│   ├── views/           # Vue 页面组件（qa/tickets/faq/users/dashboard）
-│   ├── router/          # Vue Router + beforeEach 鉴权守卫
-│   ├── stores/          # Pinia 状态管理
-│   └── layouts/         # 布局组件
-└── vite.config.ts       # Vite 配置 + API 代理
-```
-
-## 关键配置
-
-```python
-OLLAMA_BASE_URL = "http://localhost:11434"
-LLM_MODEL = "qwen2.5:7b"
-EMBEDDING_MODEL = "nomic-embed-text"
-EMBEDDING_DIMENSION = 768
-RAG_TOP_K = 5
-RAG_SIMILARITY_THRESHOLD = 0.65
-JWT_EXPIRE_MINUTES = 480
-VECTORIZE_BATCH_SIZE = 10
-VECTORIZE_BATCH_DELAY = 3
-DEFAULT_INITIAL_PASSWORD = os.getenv("DEFAULT_INITIAL_PASSWORD", "123456")
-```
+课题六“运维数字员工的建设”的核心实现：本地大模型与 RAG 私有知识库结合，为一线运维提供自助问答，并通过工单处理和知识回灌形成闭环。
 
 ## 核心流程
 
-```
-用户提问 → POST /api/qa/ask
-  → RAGPipeline.execute(question)
-    1. TextPreprocessor.process()    # jieba 分词 + 去停用词
-    2. EmbeddingManager.embed()      # Ollama → 768 维向量
-    3. VectorStore.search()          # ChromaDB 余弦 Top-K
-    4. 判阈 (≥ 0.65)
-    5. LLMManager.generate()         # Ollama 生成 / 降级引导工单
-  → qa_history 写入 + 清理旧记录（保留 20 条）
-```
-
-向量重建采用原子热切换：写临时集合 → 指针切换 → 删旧集合，全程查询不中断。
-
-## 常用命令
-
-```bash
-# 后端
-cd backend && ../venv/Scripts/python.exe main.py    # uvicorn reload
-
-# 前端
-cd frontend && npm run dev
-
-# 依赖
-../venv/Scripts/pip.exe install -r backend/requirements.txt
-cd frontend && npm install
-
-# 测试
-curl http://localhost:11434/api/tags                  # Ollama
-python -c "import chromadb; c=chromadb.PersistentClient(path='backend/data/chromadb'); print(c.get_collection('faq_vectors').count())"  # ChromaDB
-curl -s -X POST http://localhost:8000/api/auth/login -H "Content-Type: application/json" -d '{"username":"admin","password":"123456"}'  # 登录
+```text
+一线运维提问
+  -> nomic-embed-text 生成问题向量
+  -> ChromaDB Top-K 检索（异常时使用 SQLite 向量兜底）
+  -> 相似度达到阈值后，将 FAQ 上下文交给 qwen2.5:7b 生成回答
+  -> 无法解决时创建工单
+  -> 资深专家领取并提交方案
+  -> 一线运维确认解决
+  -> 专家或管理员将方案录入 FAQ
 ```
 
-## Git
+## 技术栈
 
-- `master` — 稳定主干
-- `fix/*` — 修复分支，验证后合并回 master
-- 改代码拉独立分支
+- 前端：Vue 3、TypeScript、Vite、Element Plus、Pinia、Vue Router、Axios
+- 后端：FastAPI、SQLAlchemy、Pydantic、JWT
+- 业务数据：SQLite
+- 向量检索：ChromaDB + SQLite 兜底向量表
+- 本地推理：Ollama `qwen2.5:7b`
+- 向量模型：Ollama `nomic-embed-text`（768 维）
 
-## 外部依赖
+项目采用自编排 RAG 流程，没有依赖 LangChain 执行主链路。
 
-| 服务 | 地址 | 用途 |
-|------|------|------|
-| Ollama | localhost:11434 | LLM + Embedding |
-| ChromaDB | `backend/data/chromadb` | 向量存储 |
-| SQLite | `backend/data/eknowledge.db` | 业务数据 |
+## 角色
+
+- `operator`：问答、创建工单、查看自己的工单、确认或退回专家方案。
+- `expert`：领取工单、提交方案、查看知识库、将完成方案录入 FAQ。
+- `admin`：管理账号、FAQ、全部工单和统计数据。
+
+只有 `operator` 可以发起问答和创建工单。
+
+## 核心目录
+
+```text
+backend/                         FastAPI 后端与 RAG 引擎
+frontend/                        Vue 前端源码
+knowledge_base/                  生成后的知识库 JSON
+FAQ_1000条.json                  原项目历史模拟 FAQ
+backend/scripts/build_ops_faq_kb.py
+                                 FAQ 生成、合并、导入与向量重建脚本
+start.bat / start.sh             本地启动脚本
+```
+
+`backend/data`、`frontend/dist`、`node_modules`、`venv` 和日志均为本地运行产物，不提交 Git。
+
+## 知识库
+
+- `official_ops_faq_1000.json`：基于 Linux、Docker、Kubernetes、Nginx、Apache、MySQL、PostgreSQL、Redis，以及阿里云、华为云、腾讯云故障文档构造的 1000 条可追溯 FAQ。
+- `merged_ops_faq_2000.json`：与历史 FAQ 去重后的 1985 条导入数据。
+
+FAQ 是由预设故障场景和提问模板构造，并附有来源 URL；它不是对 1000 篇官方网页的逐篇抓取。
+
+## Windows 初始化
+
+```powershell
+cd "C:\path\to\enterprise-knowledge-rag"
+
+python -m venv venv
+.\venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+
+cd frontend
+npm.cmd ci
+npm.cmd run build
+cd ..
+
+ollama pull qwen2.5:7b
+ollama pull nomic-embed-text
+```
+
+首次启动后端会创建数据库、管理员账号和种子 FAQ：
+
+```powershell
+cd backend
+..\venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 5173
+```
+
+默认管理员为 `admin / 123456`。首次启动完成后，可停止服务并导入完整知识库：
+
+```powershell
+cd backend
+..\venv\Scripts\python.exe scripts\build_ops_faq_kb.py --import-db --reindex
+```
+
+再次启动后访问 `http://127.0.0.1:5173`。

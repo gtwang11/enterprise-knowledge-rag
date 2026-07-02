@@ -1066,7 +1066,7 @@ def rebuild_chroma_sync(batch_pause: float = 0.0, embed_batch_size: int = 16) ->
         for batch_start in range(0, len(faqs), embed_batch_size):
             batch = faqs[batch_start:batch_start + embed_batch_size]
             texts = [
-                f"{faq.question} {faq.category} {faq.keywords or ''} {faq.answer[:200]}"
+                faq.question  # 仅用问题文本向量化（与查询侧对称）
                 for faq in batch
             ]
             vectors = embed_texts(texts)
