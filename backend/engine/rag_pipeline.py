@@ -60,7 +60,9 @@ class RAGPipeline:
             for r in results:
                 faq = db.query(Faq).get(r["faq_id"])
                 if faq:
-                    context_parts.append(f"问题: {faq.question}\n答案: {faq.answer}")
+                    context_parts.append(
+                        f"[FAQ #{faq.id}]\n问题: {faq.question}\n答案: {faq.answer}"
+                    )
                 else:
                     context_parts.append(f"[FAQ #{r['faq_id']}] {r['question']}")
         finally:

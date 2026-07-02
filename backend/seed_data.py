@@ -54,11 +54,13 @@ def seed_if_empty(db):
     # 检查 FAQ 是否为空
     faq_count = db.query(Faq).count()
     if faq_count > 0:
+        # The admin may have been created above even when FAQ data already exists.
+        db.commit()
         app_logger.info(f"FAQ 表已有 {faq_count} 条数据，跳过种子数据初始化")
         return
 
-    # 插入示例 FAQ
-    store = get_vector_store()
+    # 先提交业务数据，释放 SQLite 写锁，再通过独立连接写入兜底向量表。
+    seeded_faqs = []
     for item in SEED_FAQS:
         faq = Faq(
             question=item["question"],
@@ -69,13 +71,16 @@ def seed_if_empty(db):
         )
         db.add(faq)
         db.flush()
+        seeded_faqs.append(faq)
 
-        # 同步向量库
+    db.commit()
+
+    store = get_vector_store()
+    for faq in seeded_faqs:
         try:
             store.add_faq(faq.id, faq.question, faq.answer, faq.category, faq.keywords or "")
         except Exception as e:
             app_logger.error(f"种子FAQ向量化失败: faq_id={faq.id}, error={e}")
 
-    db.commit()
     app_logger.info(f"已预置 {len(SEED_FAQS)} 条示例 FAQ")
     app_logger.info("提示：首次登录后请修改默认密码")
